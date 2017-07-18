@@ -1,0 +1,146 @@
+package main
+
+import (
+	"fmt"
+	"github.com/mercadolibre/lockprovider"
+	"sync"
+	"time"
+)
+
+func lockTTLExpirationTest() {
+	const LOCK_TTL = 2
+
+	var wg sync.WaitGroup
+	locksProvider := locksprovider.NewProvider(time.Hour)
+
+	for i := 1; i < 11; i++ {
+		go func(index int) {
+			wg.Add(1)
+			defer wg.Done()
+
+			fmt.Println("Starting thread, thread", index)
+			locksProvider.Lock("bleh", time.Second*LOCK_TTL)
+
+			fmt.Printf("Acquired lock and it will never be released, Provider should release it automatically in %d seconds - thread %d\n", LOCK_TTL, index)
+
+			// Locks should start releasing automatically after 2 seconds of retrieval
+			<-time.After(time.Second * 5)
+		}(i)
+	}
+
+	<-time.After(time.Second * 2)
+	wg.Wait()
+}
+
+func lockTTLCancellationTest() {
+	var wg sync.WaitGroup
+	locksProvider := locksprovider.NewProvider(time.Hour)
+
+	alive := 0
+	for i := 1; i < 11; i++ {
+		go func(index int) {
+			wg.Add(1)
+			defer wg.Done()
+
+			fmt.Println("Starting thread, thread", index)
+			lock, err := locksProvider.Lock("bleh", time.Second*2)
+
+			if err == nil {
+				fmt.Println("Acquired lock, thread", index)
+				alive++
+
+				if alive == 3 {
+					fmt.Println("Calling AutoRenew() on TTL Lock from thread", index, ", all remaining threads should idle forever as lock is never released")
+					lock.AutoRenew(time.Hour)
+				}
+
+				// Locks should start releasing automatically after 2 seconds of retrieval
+			} else {
+				fmt.Printf("Thread %d lock acquiring timeout: %v\n", index, err)
+			}
+
+			<-time.After(time.Second * 5)
+		}(i)
+	}
+
+	<-time.After(time.Second * 2)
+	wg.Wait()
+}
+
+func locksTimeoutTest() {
+	var wg sync.WaitGroup
+	locksProvider := locksprovider.NewProvider(time.Second * 5)
+
+	for i := 1; i < 11; i++ {
+		go func(index int) {
+			wg.Add(1)
+			defer wg.Done()
+
+			fmt.Println("Starting thread, thread", index)
+			_, err := locksProvider.Lock("bleh")
+
+			if err != nil {
+				fmt.Printf("Error acquiring lock, thread: %d, error: %s\n", index, err)
+			} else {
+				fmt.Println("Acquired lock, thread", index)
+			}
+		}(i)
+	}
+
+	<-time.After(time.Second * 2)
+	wg.Wait()
+	<-time.After(time.Second * 2)
+}
+
+func locksReleaseTest() {
+	var wg sync.WaitGroup
+	locksProvider := locksprovider.NewProvider(time.Hour)
+
+	for i := 1; i < 11; i++ {
+		go func(index int) {
+			wg.Add(1)
+			defer wg.Done()
+
+			fmt.Println("Starting thread and attempting to acquire lock, thread", index)
+			lock, err := locksProvider.Lock("bleh")
+
+			if err != nil {
+				fmt.Println("Error acquiring lock, thread:", index, err)
+			} else {
+				fmt.Println("Acquired lock, thread", index)
+				<-time.After(time.Second * 3)
+
+				fmt.Printf("IsValid() before Release %t - thread %d\n", lock.IsValid(), index)
+				lock.Release()
+				fmt.Printf("IsValid() after Release %t - thread %d\n", lock.IsValid(), index)
+			}
+		}(i)
+	}
+
+	// Give time to go routines to increment wg
+	<-time.After(time.Second * 1)
+	wg.Wait()
+	<-time.After(time.Second * 2)
+}
+
+// should add a debug print in provider code to check tunnels are being clenedup properly
+
+func locksCleanupTest() {
+	const CLEANUP_TIMEOUT = 5
+
+	locksProvider := locksprovider.NewProvider(time.Second, time.Second*CLEANUP_TIMEOUT)
+	lock, err := locksProvider.Lock("bleh")
+
+	if err != nil {
+		fmt.Println("Error acquiring lock:", err)
+	} else {
+		fmt.Printf("Acquired lock and released immediately, cleanup debug print should be printed in %d seconds\n", CLEANUP_TIMEOUT)
+		lock.Release()
+	}
+
+	<-time.After(time.Second * 10)
+}
+
+func main() {
+	lockTTLExpirationTest()
+}
